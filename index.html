@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>麺Earth 人口推移</title>
-<meta name="description" content="麺Earthサーバーのオンライン人口の推移（1時間ごとに記録・恒久保存）">
+<meta name="description" content="麺Earthサーバーのオンライン人口の推移（10分ごとに記録・恒久保存）">
 <style>
   /* ============================================================
    * 設定: あなたのFirebase Realtime DatabaseのURLに書き換えてください。
@@ -256,7 +256,7 @@
     <header class="top">
       <div>
         <h1>麺Earth 人口推移</h1>
-        <p class="subtitle">1時間ごとに記録・恒久保存（シーズンが切り替わっても消えません）</p>
+        <p class="subtitle">10分ごとに記録・恒久保存（シーズンが切り替わっても消えません）</p>
       </div>
       <button class="theme-toggle" id="themeToggle" type="button">🌓 表示切替</button>
     </header>
@@ -307,7 +307,7 @@
 
   // ★★★ ここをあなたのFirebase Realtime DatabaseのURLに書き換えてください ★★★
   // 例: "https://your-project-default-rtdb.firebaseio.com"
-  var FIREBASE_DB_URL = "https://graph-ef6fa-default-rtdb.asia-southeast1.firebasedatabase.app";
+  var FIREBASE_DB_URL = "https://REPLACE_ME-default-rtdb.firebaseio.com";
 
   var els = {
     themeToggle: document.getElementById("themeToggle"),
@@ -359,7 +359,7 @@
       })
       .then(function (data) {
         if (!data) {
-          showState("まだデータがありません。サーバーが1時間以上稼働すると記録され始めます。");
+          showState("まだデータがありません。サーバーが10分以上稼働すると記録され始めます。");
           return;
         }
         allPoints = Object.keys(data)
@@ -373,7 +373,7 @@
           .sort(function (a, b) { return a.t - b.t; });
 
         if (allPoints.length === 0) {
-          showState("まだデータがありません。サーバーが1時間以上稼働すると記録され始めます。");
+          showState("まだデータがありません。サーバーが10分以上稼働すると記録され始めます。");
           return;
         }
 

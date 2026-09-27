@@ -1,0 +1,653 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>麺Earth 人口推移</title>
+<meta name="description" content="麺Earthサーバーのオンライン人口の推移（1時間ごとに記録・恒久保存）">
+<style>
+  /* ============================================================
+   * 設定: あなたのFirebase Realtime DatabaseのURLに書き換えてください。
+   * （下の<script>内のFIREBASE_DB_URLという定数です）
+   * 例: "https://your-project-default-rtdb.firebaseio.com"
+   * Realtime Databaseのルールで /population だけ読み取り公開にしておくこと:
+   *   { "rules": { "population": { ".read": true, ".write": false } } }
+   * ============================================================ */
+
+  .viz-root {
+    color-scheme: light;
+    --page-plane:      #f9f9f7;
+    --surface-1:       #fcfcfb;
+    --text-primary:    #0b0b0b;
+    --text-secondary:  #52514e;
+    --text-muted:      #898781;
+    --gridline:        #e1e0d9;
+    --baseline:        #c3c2b7;
+    --border:          rgba(11,11,11,0.10);
+    --series-1:        #2a78d6;
+    --series-1-wash:   rgba(42,120,214,0.10);
+    --good:            #0ca30c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) .viz-root {
+      color-scheme: dark;
+      --page-plane:      #0d0d0d;
+      --surface-1:       #1a1a19;
+      --text-primary:    #ffffff;
+      --text-secondary:  #c3c2b7;
+      --text-muted:      #898781;
+      --gridline:        #2c2c2a;
+      --baseline:        #383835;
+      --border:          rgba(255,255,255,0.10);
+      --series-1:        #3987e5;
+      --series-1-wash:   rgba(57,135,229,0.14);
+      --good:            #0ca30c;
+    }
+  }
+  :root[data-theme="dark"] .viz-root {
+    color-scheme: dark;
+    --page-plane:      #0d0d0d;
+    --surface-1:       #1a1a19;
+    --text-primary:    #ffffff;
+    --text-secondary:  #c3c2b7;
+    --text-muted:      #898781;
+    --gridline:        #2c2c2a;
+    --baseline:        #383835;
+    --border:          rgba(255,255,255,0.10);
+    --series-1:        #3987e5;
+    --series-1-wash:   rgba(57,135,229,0.14);
+    --good:            #0ca30c;
+  }
+
+  * { box-sizing: border-box; }
+  /* [hidden]属性は、同じ要素にdisplayを指定するクラス（.stats等）があると
+     詳細度の勝負で負けて効かなくなることがあるため、明示的に強制する */
+  [hidden] { display: none !important; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  /* --page-plane等のCSS変数は.viz-root自身に定義されているため、
+     background/colorは.viz-root自身に適用する（bodyに書いても子の変数は見えない） */
+  .viz-root {
+    min-height: 100vh;
+    background: var(--page-plane);
+    color: var(--text-primary);
+  }
+  .wrap {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 24px 16px 64px;
+  }
+  header.top {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 20px;
+  }
+  h1 {
+    font-size: 20px;
+    margin: 0 0 4px;
+  }
+  .subtitle {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 0;
+  }
+  button.theme-toggle {
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    color: var(--text-secondary);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 13px;
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  button.theme-toggle:hover { color: var(--text-primary); }
+
+  /* フィルター行 */
+  .filters {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+  }
+  .filters button {
+    border: 1px solid var(--border);
+    background: var(--surface-1);
+    color: var(--text-secondary);
+    border-radius: 999px;
+    padding: 6px 14px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .filters button[aria-pressed="true"] {
+    background: var(--series-1);
+    border-color: var(--series-1);
+    color: #fff;
+    font-weight: 600;
+  }
+  .filters button:not([aria-pressed="true"]):hover {
+    color: var(--text-primary);
+  }
+
+  /* スタットタイル */
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px;
+    margin-bottom: 18px;
+  }
+  .stat-tile {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 14px;
+  }
+  .stat-tile .label {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin: 0 0 4px;
+  }
+  .stat-tile .value {
+    font-size: 28px;
+    font-weight: 600;
+    margin: 0;
+    line-height: 1.1;
+  }
+  .stat-tile.hero .value { color: var(--series-1); }
+
+  /* チャートカード */
+  .chart-card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 8px 8px;
+    position: relative;
+  }
+  svg.chart { display: block; width: 100%; height: auto; overflow: visible; }
+  .grid-line { stroke: var(--gridline); stroke-width: 1; shape-rendering: crispEdges; }
+  .axis-line { stroke: var(--baseline); stroke-width: 1; shape-rendering: crispEdges; }
+  .axis-label { fill: var(--text-muted); font-size: 11px; }
+  .area-fill { fill: var(--series-1-wash); }
+  .line-path { fill: none; stroke: var(--series-1); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .end-dot { fill: var(--series-1); stroke: var(--surface-1); stroke-width: 2; }
+  .crosshair-line { stroke: var(--text-muted); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+  .crosshair-dot { fill: var(--series-1); stroke: var(--surface-1); stroke-width: 2; pointer-events: none; }
+  .hit-layer { fill: transparent; cursor: crosshair; }
+
+  .tooltip {
+    position: absolute;
+    pointer-events: none;
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 6px 10px;
+    font-size: 12px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.12);
+    white-space: nowrap;
+    opacity: 0;
+    transition: opacity 0.08s;
+    z-index: 5;
+  }
+  .tooltip .t-value { color: var(--text-primary); font-weight: 700; font-size: 14px; }
+  .tooltip .t-label { color: var(--text-secondary); }
+
+  .footnote {
+    font-size: 12px;
+    color: var(--text-muted);
+    margin-top: 12px;
+  }
+  .state-msg {
+    padding: 40px 16px;
+    text-align: center;
+    color: var(--text-secondary);
+    font-size: 14px;
+  }
+  .state-msg code {
+    background: var(--gridline);
+    padding: 1px 5px;
+    border-radius: 4px;
+  }
+
+  details.table-view { margin-top: 14px; }
+  details.table-view summary {
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--text-secondary);
+  }
+  .data-table-scroll {
+    max-height: 300px;
+    overflow-y: auto;
+    margin-top: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+  }
+  table.data-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 13px;
+  }
+  table.data-table th, table.data-table td {
+    text-align: left;
+    padding: 6px 10px;
+    border-bottom: 1px solid var(--gridline);
+    font-variant-numeric: tabular-nums;
+  }
+  table.data-table th {
+    position: sticky;
+    top: 0;
+    background: var(--surface-1);
+    color: var(--text-secondary);
+    font-weight: 600;
+  }
+
+  @media (max-width: 480px) {
+    .stats { grid-template-columns: 1fr 1fr; }
+    .stats .stat-tile.hero { grid-column: 1 / -1; }
+  }
+</style>
+</head>
+<body>
+<div class="viz-root">
+  <div class="wrap">
+    <header class="top">
+      <div>
+        <h1>麺Earth 人口推移</h1>
+        <p class="subtitle">1時間ごとに記録・恒久保存（シーズンが切り替わっても消えません）</p>
+      </div>
+      <button class="theme-toggle" id="themeToggle" type="button">🌓 表示切替</button>
+    </header>
+
+    <div class="filters" id="filters" role="group" aria-label="期間の選択">
+      <button data-range="24h" aria-pressed="false">24時間</button>
+      <button data-range="7d"  aria-pressed="false">7日間</button>
+      <button data-range="30d" aria-pressed="true">30日間</button>
+      <button data-range="all" aria-pressed="false">全期間</button>
+    </div>
+
+    <div class="stats" id="stats" hidden>
+      <div class="stat-tile hero">
+        <p class="label">現在の人口</p>
+        <p class="value" id="statCurrent">-</p>
+      </div>
+      <div class="stat-tile">
+        <p class="label">選択期間の最大</p>
+        <p class="value" id="statMax">-</p>
+      </div>
+      <div class="stat-tile">
+        <p class="label">選択期間の平均</p>
+        <p class="value" id="statAvg">-</p>
+      </div>
+    </div>
+
+    <div class="chart-card" id="chartCard">
+      <div class="state-msg" id="stateMsg">読み込み中…</div>
+    </div>
+
+    <details class="table-view" id="tableView" hidden>
+      <summary>表で見る（選択期間のデータ）</summary>
+      <div class="data-table-scroll">
+        <table class="data-table">
+          <thead><tr><th>日時</th><th>人口</th></tr></thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+      </div>
+    </details>
+
+    <p class="footnote" id="updatedAt"></p>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ★★★ ここをあなたのFirebase Realtime DatabaseのURLに書き換えてください ★★★
+  // 例: "https://your-project-default-rtdb.firebaseio.com"
+  var FIREBASE_DB_URL = "https://REPLACE_ME-default-rtdb.firebaseio.com";
+
+  var els = {
+    themeToggle: document.getElementById("themeToggle"),
+    filters: document.getElementById("filters"),
+    stats: document.getElementById("stats"),
+    statCurrent: document.getElementById("statCurrent"),
+    statMax: document.getElementById("statMax"),
+    statAvg: document.getElementById("statAvg"),
+    chartCard: document.getElementById("chartCard"),
+    stateMsg: document.getElementById("stateMsg"),
+    tableView: document.getElementById("tableView"),
+    tableBody: document.getElementById("tableBody"),
+    updatedAt: document.getElementById("updatedAt"),
+  };
+
+  var allPoints = [];   // [{t: msTimestamp, c: count}], 昇順
+  var currentRange = "30d";
+  var MAX_RENDER_POINTS = 600; // これを超える場合は間引いて描画する
+
+  // ---------------- テーマ切替（localStorageは表示専用の記憶。取得失敗しても無害） ----------------
+  function applyTheme(theme) {
+    if (theme === "dark" || theme === "light") {
+      document.documentElement.setAttribute("data-theme", theme);
+    } else {
+      document.documentElement.removeAttribute("data-theme");
+    }
+  }
+  (function initTheme() {
+    var saved = null;
+    try { saved = localStorage.getItem("menearth_population_theme"); } catch (e) {}
+    applyTheme(saved);
+  })();
+  els.themeToggle.addEventListener("click", function () {
+    var current = document.documentElement.getAttribute("data-theme");
+    var next = current === "dark" ? "light" : (current === "light" ? null : "dark");
+    applyTheme(next);
+    try {
+      if (next) localStorage.setItem("menearth_population_theme", next);
+      else localStorage.removeItem("menearth_population_theme");
+    } catch (e) {}
+  });
+
+  // ---------------- データ取得 ----------------
+  function loadData() {
+    fetch(FIREBASE_DB_URL.replace(/\/$/, "") + "/population.json")
+      .then(function (res) {
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        return res.json();
+      })
+      .then(function (data) {
+        if (!data) {
+          showState("まだデータがありません。サーバーが1時間以上稼働すると記録され始めます。");
+          return;
+        }
+        allPoints = Object.keys(data)
+          .map(function (k) {
+            var v = data[k];
+            var t = Number(v && v.timestamp != null ? v.timestamp : k);
+            var c = Number(v && v.count);
+            return { t: t, c: c };
+          })
+          .filter(function (p) { return Number.isFinite(p.t) && Number.isFinite(p.c); })
+          .sort(function (a, b) { return a.t - b.t; });
+
+        if (allPoints.length === 0) {
+          showState("まだデータがありません。サーバーが1時間以上稼働すると記録され始めます。");
+          return;
+        }
+
+        els.stats.hidden = false;
+        els.tableView.hidden = false;
+        render();
+
+        var last = allPoints[allPoints.length - 1];
+        els.updatedAt.textContent = "最終更新: " + formatDateTime(last.t);
+      })
+      .catch(function (err) {
+        console.error(err);
+        showState(
+          "データを読み込めませんでした。FIREBASE_DB_URLの設定、または" +
+          "Realtime Databaseの読み取りルール（/population を .read: true）を確認してください。"
+        );
+      });
+  }
+
+  function showState(msg) {
+    els.chartCard.innerHTML = "";
+    var div = document.createElement("div");
+    div.className = "state-msg";
+    div.textContent = msg;
+    els.chartCard.appendChild(div);
+  }
+
+  // ---------------- フィルター ----------------
+  els.filters.addEventListener("click", function (e) {
+    var btn = e.target.closest("button[data-range]");
+    if (!btn) return;
+    currentRange = btn.getAttribute("data-range");
+    Array.prototype.forEach.call(els.filters.querySelectorAll("button"), function (b) {
+      b.setAttribute("aria-pressed", String(b === btn));
+    });
+    render();
+  });
+
+  function rangeMs(range) {
+    var H = 60 * 60 * 1000, D = 24 * H;
+    if (range === "24h") return 24 * H;
+    if (range === "7d") return 7 * D;
+    if (range === "30d") return 30 * D;
+    return Infinity;
+  }
+
+  function getFilteredPoints() {
+    if (allPoints.length === 0) return [];
+    var span = rangeMs(currentRange);
+    if (!Number.isFinite(span)) return allPoints;
+    var cutoff = allPoints[allPoints.length - 1].t - span;
+    return allPoints.filter(function (p) { return p.t >= cutoff; });
+  }
+
+  function decimate(points, maxPoints) {
+    if (points.length <= maxPoints) return points;
+    var step = Math.ceil(points.length / maxPoints);
+    var out = [];
+    for (var i = 0; i < points.length; i += step) out.push(points[i]);
+    var lastSrc = points[points.length - 1];
+    if (out[out.length - 1] !== lastSrc) out.push(lastSrc);
+    return out;
+  }
+
+  // ---------------- 描画 ----------------
+  function render() {
+    var filtered = getFilteredPoints();
+    if (filtered.length === 0) { showState("この期間のデータはまだありません。"); return; }
+
+    renderStats(filtered);
+    renderChart(decimate(filtered, MAX_RENDER_POINTS));
+    renderTable(filtered);
+  }
+
+  function renderStats(points) {
+    var last = points[points.length - 1];
+    var max = points.reduce(function (m, p) { return Math.max(m, p.c); }, -Infinity);
+    var avg = points.reduce(function (s, p) { return s + p.c; }, 0) / points.length;
+    els.statCurrent.textContent = last.c.toLocaleString("ja-JP") + "人";
+    els.statMax.textContent = max.toLocaleString("ja-JP") + "人";
+    els.statAvg.textContent = avg.toFixed(1) + "人";
+  }
+
+  function renderTable(points) {
+    var rows = points.slice().reverse(); // 新しい順
+    var frag = document.createDocumentFragment();
+    rows.forEach(function (p) {
+      var tr = document.createElement("tr");
+      var tdT = document.createElement("td");
+      tdT.textContent = formatDateTime(p.t);
+      var tdC = document.createElement("td");
+      tdC.textContent = String(p.c);
+      tr.appendChild(tdT);
+      tr.appendChild(tdC);
+      frag.appendChild(tr);
+    });
+    els.tableBody.innerHTML = "";
+    els.tableBody.appendChild(frag);
+  }
+
+  function formatDateTime(ms) {
+    var d = new Date(ms);
+    var pad = function (n) { return String(n).padStart(2, "0"); };
+    return d.getFullYear() + "/" + pad(d.getMonth() + 1) + "/" + pad(d.getDate()) +
+      " " + pad(d.getHours()) + ":" + pad(d.getMinutes());
+  }
+
+  function renderChart(points) {
+    var W = 840, H = 320, padL = 44, padR = 16, padT = 16, padB = 28;
+    var innerW = W - padL - padR, innerH = H - padT - padB;
+
+    var minT = points[0].t, maxT = points[points.length - 1].t;
+    var spanT = Math.max(1, maxT - minT);
+    var maxC = points.reduce(function (m, p) { return Math.max(m, p.c); }, 0);
+    var niceMax = niceCeil(maxC === 0 ? 1 : maxC * 1.15);
+
+    function x(t) { return padL + ((t - minT) / spanT) * innerW; }
+    function y(c) { return padT + innerH - (c / niceMax) * innerH; }
+
+    var svgNS = "http://www.w3.org/2000/svg";
+    var svg = document.createElementNS(svgNS, "svg");
+    svg.setAttribute("class", "chart");
+    svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+    svg.setAttribute("role", "img");
+    svg.setAttribute("aria-label", "人口推移の折れ線グラフ");
+
+    // グリッド線 + Y軸ラベル（0, 中間, 最大の3段階）
+    var steps = 4;
+    for (var i = 0; i <= steps; i++) {
+      var val = (niceMax / steps) * i;
+      var yy = y(val);
+      var gl = document.createElementNS(svgNS, "line");
+      gl.setAttribute("class", "grid-line");
+      gl.setAttribute("x1", padL); gl.setAttribute("x2", W - padR);
+      gl.setAttribute("y1", yy); gl.setAttribute("y2", yy);
+      svg.appendChild(gl);
+
+      var lbl = document.createElementNS(svgNS, "text");
+      lbl.setAttribute("class", "axis-label");
+      lbl.setAttribute("x", padL - 8);
+      lbl.setAttribute("y", yy + 4);
+      lbl.setAttribute("text-anchor", "end");
+      lbl.textContent = Math.round(val).toLocaleString("ja-JP");
+      svg.appendChild(lbl);
+    }
+
+    // X軸ラベル（始点・終点の日時）
+    [minT, maxT].forEach(function (t, idx) {
+      var lbl = document.createElementNS(svgNS, "text");
+      lbl.setAttribute("class", "axis-label");
+      lbl.setAttribute("x", idx === 0 ? padL : W - padR);
+      lbl.setAttribute("y", H - 8);
+      lbl.setAttribute("text-anchor", idx === 0 ? "start" : "end");
+      lbl.textContent = formatDateTime(t);
+      svg.appendChild(lbl);
+    });
+
+    // ベースライン
+    var baseline = document.createElementNS(svgNS, "line");
+    baseline.setAttribute("class", "axis-line");
+    baseline.setAttribute("x1", padL); baseline.setAttribute("x2", W - padR);
+    baseline.setAttribute("y1", padT + innerH); baseline.setAttribute("y2", padT + innerH);
+    svg.appendChild(baseline);
+
+    // エリア塗り + 折れ線
+    var linePts = points.map(function (p) { return x(p.t) + "," + y(p.c); }).join(" ");
+    var areaPts = "" + x(points[0].t) + "," + (padT + innerH) + " " + linePts + " " +
+      x(points[points.length - 1].t) + "," + (padT + innerH);
+
+    var area = document.createElementNS(svgNS, "polygon");
+    area.setAttribute("class", "area-fill");
+    area.setAttribute("points", areaPts);
+    svg.appendChild(area);
+
+    var line = document.createElementNS(svgNS, "polyline");
+    line.setAttribute("class", "line-path");
+    line.setAttribute("points", linePts);
+    svg.appendChild(line);
+
+    // 終点ドット（direct label: 最新値）
+    var lastP = points[points.length - 1];
+    var endDot = document.createElementNS(svgNS, "circle");
+    endDot.setAttribute("class", "end-dot");
+    endDot.setAttribute("cx", x(lastP.t)); endDot.setAttribute("cy", y(lastP.c)); endDot.setAttribute("r", 4);
+    svg.appendChild(endDot);
+
+    // クロスヘア（初期非表示）
+    var crossLine = document.createElementNS(svgNS, "line");
+    crossLine.setAttribute("class", "crosshair-line");
+    crossLine.setAttribute("y1", padT); crossLine.setAttribute("y2", padT + innerH);
+    crossLine.style.display = "none";
+    svg.appendChild(crossLine);
+
+    var crossDot = document.createElementNS(svgNS, "circle");
+    crossDot.setAttribute("class", "crosshair-dot");
+    crossDot.setAttribute("r", 5);
+    crossDot.style.display = "none";
+    svg.appendChild(crossDot);
+
+    // ヒット領域（ポインタ全体で反応させる）
+    var hit = document.createElementNS(svgNS, "rect");
+    hit.setAttribute("class", "hit-layer");
+    hit.setAttribute("x", padL); hit.setAttribute("y", padT);
+    hit.setAttribute("width", innerW); hit.setAttribute("height", innerH);
+    svg.appendChild(hit);
+
+    els.chartCard.innerHTML = "";
+    els.chartCard.appendChild(svg);
+
+    var tooltip = document.createElement("div");
+    tooltip.className = "tooltip";
+    tooltip.innerHTML = '<div class="t-value"></div><div class="t-label"></div>';
+    els.chartCard.appendChild(tooltip);
+    var tValue = tooltip.querySelector(".t-value");
+    var tLabel = tooltip.querySelector(".t-label");
+
+    function nearestIndex(px) {
+      var t = minT + ((px - padL) / innerW) * spanT;
+      var lo = 0, hi = points.length - 1;
+      while (lo < hi) {
+        var mid = (lo + hi) >> 1;
+        if (points[mid].t < t) lo = mid + 1; else hi = mid;
+      }
+      if (lo > 0 && Math.abs(points[lo - 1].t - t) < Math.abs(points[lo].t - t)) lo -= 1;
+      return lo;
+    }
+
+    function pointerMove(evt) {
+      var rect = svg.getBoundingClientRect();
+      var clientX = evt.touches ? evt.touches[0].clientX : evt.clientX;
+      var px = ((clientX - rect.left) / rect.width) * W;
+      var idx = nearestIndex(Math.max(padL, Math.min(W - padR, px)));
+      var p = points[idx];
+      var cx = x(p.t), cy = y(p.c);
+
+      crossLine.setAttribute("x1", cx); crossLine.setAttribute("x2", cx);
+      crossLine.style.display = "";
+      crossDot.setAttribute("cx", cx); crossDot.setAttribute("cy", cy);
+      crossDot.style.display = "";
+
+      tValue.textContent = p.c.toLocaleString("ja-JP") + "人";
+      tLabel.textContent = formatDateTime(p.t);
+
+      var cardRect = els.chartCard.getBoundingClientRect();
+      var svgLeft = rect.left - cardRect.left;
+      var svgScale = rect.width / W;
+      var left = svgLeft + cx * svgScale;
+      var top = (rect.top - cardRect.top) + cy * svgScale - 44;
+      tooltip.style.left = Math.max(4, Math.min(cardRect.width - 120, left)) + "px";
+      tooltip.style.top = Math.max(4, top) + "px";
+      tooltip.style.opacity = "1";
+    }
+    function pointerLeave() {
+      crossLine.style.display = "none";
+      crossDot.style.display = "none";
+      tooltip.style.opacity = "0";
+    }
+
+    hit.addEventListener("pointermove", pointerMove);
+    hit.addEventListener("pointerleave", pointerLeave);
+    hit.addEventListener("touchmove", function (e) { pointerMove(e); e.preventDefault(); }, { passive: false });
+    hit.addEventListener("touchend", pointerLeave);
+  }
+
+  function niceCeil(v) {
+    if (v <= 0) return 1;
+    var pow = Math.pow(10, Math.floor(Math.log10(v)));
+    var n = v / pow;
+    var nice = n <= 1 ? 1 : n <= 2 ? 2 : n <= 5 ? 5 : 10;
+    return nice * pow;
+  }
+
+  loadData();
+})();
+</script>
+</body>
+</html>
